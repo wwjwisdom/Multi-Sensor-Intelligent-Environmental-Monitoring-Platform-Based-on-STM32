@@ -1,0 +1,32 @@
+# 配置文件示例
+# 复制此文件为 config.yaml 并填入实际值
+
+server:
+  port: 8080
+  mode: debug
+
+amqp:
+  enabled: true
+  host: "你的AMQP_HOST"
+  port: 5671
+  access_key_id: "你的AccessKeyID"
+  access_key_secret: "你的AccessKeySecret"
+  consumer_group_id: "你的消费组ID"
+  iot_instance_id: "你的实例ID"
+
+mqtt:
+  broker: "你的MQTT Broker"
+  port: 1883
+  # ... 其他MQTT配置
+
+storage:
+  data_dir: "./Data/history"
+  retention_days: 180  # 保留180天
+
+alarm:
+  enabled: true
+  check_interval: 5s
+
+logging:
+  level: "info"
+  path: "./Data/logs/app.log"
