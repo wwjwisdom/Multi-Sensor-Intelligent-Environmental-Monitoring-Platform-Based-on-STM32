@@ -4,14 +4,45 @@
 
 本系统基于 Go + Gin 框架开发，通过 AMQP 协议接收阿里云 IoT 平台设备数据，提供 HTTP REST API 给前端使用。
 
-## 快速开始
+---
+
+## 部署步骤
+
+### 1. 克隆代码
+
+```bash
+git clone https://github.com/wwjwisdom/Multi-Sensor-Intelligent-Environmental-Monitoring-Platform-Based-on-STM32.git
+cd Multi-Sensor-Intelligent-Environmental-Monitoring-Platform-Based-on-STM32
+```
+
+### 2. 配置
+
+```bash
+# 复制配置模板
+cp Data/config/config.yaml.example Data/config/config.yaml
+
+# 编辑配置文件，填入阿里云 AccessKey
+vi Data/config/config.yaml
+```
+
+### 3. 编译运行
+
+```bash
+cd Src
+go build -o sensor-backend.exe ./cmd/main.go
+./sensor-backend.exe
+```
+
+服务将在 `http://localhost:8080` 启动。
+
+---
+
+## 快速开始（已配置环境）
 
 ```bash
 cd Src
 ./sensor-backend.exe
 ```
-
-服务将在 `http://localhost:8080` 启动。
 
 ---
 
@@ -135,3 +166,18 @@ GET /health
 - **实时数据**: 内存存储
 - **历史数据**: `Data/history/` 目录，按日期分文件
 - **保留期限**: 180天，自动清理
+
+---
+
+## 代码统计
+
+| 模块 | 行数 |
+|------|------|
+| internal/amqp (AMQP客户端) | 817 |
+| internal/mqtt (MQTT客户端) | 376 |
+| internal/handler (HTTP处理器) | 436 |
+| internal/repository (数据存储) | 230 |
+| internal/alarm (报警引擎) | 267 |
+| cmd/main.go | 151 |
+| 其他 | 398 |
+| **总计** | **2675** |
