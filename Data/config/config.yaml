@@ -1,0 +1,39 @@
+server:
+  port: 8080
+  mode: debug
+
+mqtt:
+  broker: "iot-06z00i44a0e6h4j.mqtt.iothub.aliyuncs.com"
+  port: 1883
+  client_id: "k1up5kx7eJp.STM32-EnvMonitor-001|securemode=2,signmethod=hmacsha256,timestamp=1772985691020|"
+  username: "STM32-EnvMonitor-001&k1up5kx7eJp"
+  password: "6e77e523e4229e46a81d607d80b137a8333dd19065f373363541989f0730415d"
+  # 订阅规则引擎转发的用户主题（已弃用，数据通过AMQP接收）
+  subscribe_topic: ""
+  subscribe_topic_wildcard: ""
+  publish_topic: "/sys/k1up5kx7eJp/STM32-EnvMonitor-001/thing/service/property/set"
+  qos: 1
+  keep_alive: 60s
+  ping_timeout: 10s
+  max_reconnect_interval: 30s
+
+amqp:
+  enabled: true
+  host: "1839698907957811.iot-amqp.cn-shanghai.aliyuncs.com"
+  port: 5671
+  access_key_id: "${AMQP_ACCESS_KEY_ID}"
+  access_key_secret: "${AMQP_ACCESS_KEY_SECRET}"
+  consumer_group_id: "iTBzD2E305Mk5ynSrqdS000100"
+  iot_instance_id: "iot-06z00i44a0e6h4j"
+
+storage:
+  data_dir: "./Data/history"
+  retention_days: 180  # 保留180天（约6个月）
+
+alarm:
+  enabled: true
+  check_interval: 5s
+
+logging:
+  level: "info"
+  path: "./Data/logs/app.log"
