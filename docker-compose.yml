@@ -10,7 +10,7 @@ services:
       POSTGRES_PASSWORD: sensor123
       POSTGRES_DB: sensor_db
     ports:
-      - "5432:5432"
+      - "5555:5432"
     volumes:
       - timescaledb_data:/var/lib/postgresql/data
     healthcheck:

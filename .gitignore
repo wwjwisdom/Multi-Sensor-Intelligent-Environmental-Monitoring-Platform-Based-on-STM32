@@ -3,6 +3,7 @@ Data/config/config.yaml
 
 # 可执行文件
 *.exe
+Src/main.exe
 
 # IDE
 .idea/
@@ -16,3 +17,13 @@ Data/config/config.yaml
 # 临时文件
 *.tmp
 *.log
+
+# 数据目录
+Data/history/
+Data/logs/
+
+# 临时文件
+
+# 测试文件
+test*.go
+generate_test_data.py

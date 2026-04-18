@@ -15,6 +15,7 @@ import (
 	"sensor-backend/Src/internal/config"
 	"sensor-backend/Src/internal/model"
 	"sensor-backend/Src/internal/repository"
+	"sensor-backend/Src/internal/tsdb"
 	"sensor-backend/Src/pkg/utils"
 
 	amqp "pack.ag/amqp"
@@ -25,6 +26,7 @@ import (
 type Client struct {
 	config      config.AMQPConfig
 	store       *repository.Storage
+	tsdbClient  *tsdb.Client
 	alarmEngine *alarm.AlarmEngine
 	wsHandler   interface{ Broadcast([]byte) }
 	connected   bool
@@ -44,13 +46,19 @@ type AmqpManager struct {
 	store       *repository.Storage
 	alarmEngine *alarm.AlarmEngine
 	wsHandler   interface{ Broadcast([]byte) }
+	tsdbClient  *tsdb.Client
 }
 
 // NewClient 创建AMQP客户端
-func NewClient(cfg config.AMQPConfig, store *repository.Storage, alarmEngine *alarm.AlarmEngine) *Client {
+func NewClient(cfg config.AMQPConfig, store *repository.Storage, alarmEngine *alarm.AlarmEngine, tsdbCli ...*tsdb.Client) *Client {
+	var tc *tsdb.Client
+	if len(tsdbCli) > 0 {
+		tc = tsdbCli[0]
+	}
 	return &Client{
 		config:      cfg,
 		store:       store,
+		tsdbClient:  tc,
 		alarmEngine: alarmEngine,
 		connected:   false,
 	}
@@ -91,6 +99,7 @@ func (c *Client) run(ctx context.Context) {
 			store:       c.store,
 			alarmEngine: c.alarmEngine,
 			wsHandler:   c.wsHandler,
+			tsdbClient:  c.tsdbClient,
 		}
 
 		// 设置连接参数
@@ -246,6 +255,13 @@ func (am *AmqpManager) processMessage(message *amqp.Message) {
 	if err := am.store.SaveHistory(sensorData); err != nil {
 		utils.Logger.Error("保存历史数据失败", zap.Error(err))
 	}
+
+		// 保存到 TimescaleDB
+		if am.tsdbClient != nil {
+			if err := am.tsdbClient.InsertSensorData(sensorData); err != nil {
+				utils.Logger.Error("写入TimescaleDB失败", zap.Error(err))
+			}
+		}
 
 	// 检查报警
 	am.alarmEngine.CheckAlarms(sensorData)

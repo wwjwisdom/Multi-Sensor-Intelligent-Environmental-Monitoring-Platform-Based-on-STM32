@@ -1,45 +1,88 @@
 # 配置文件示例
 # 复制此文件为 config.yaml 并填入实际值
+#
+# 敏感信息说明：
+# - 请勿将 config.yaml 提交到 GitHub
+# - 阿里云 AccessKey 等信息请在阿里云控制台获取
+# - 数据库密码可自行修改
 
 server:
   port: 8080
   mode: debug
 
-amqp:
-  enabled: true
-  host: "你的AMQP_HOST"
-  port: 5671
-  access_key_id: "你的AccessKeyID"
-  access_key_secret: "你的AccessKeySecret"
-  consumer_group_id: "你的消费组ID"
-  iot_instance_id: "你的实例ID"
+# ===========================================
+# 阿里云 IoT 配置（从阿里云控制台获取）
+# ===========================================
 
 mqtt:
-  broker: "你的MQTT Broker"
+  broker: "替换为你的MQTT Broker地址"
   port: 1883
-  # ... 其他MQTT配置
+  client_id: "你的客户端ID|securemode=2,signmethod=hmacsha256,timestamp=xxx|"
+  username: "设备名&产品Key"
+  password: "替换为你的密码"
+  subscribe_topic: ""
+  subscribe_topic_wildcard: ""
+  publish_topic: "/sys/产品Key/设备名/thing/service/property/set"
+  qos: 1
+  keep_alive: 60s
+  ping_timeout: 10s
+  max_reconnect_interval: 30s
+
+amqp:
+  enabled: true
+  host: "替换为AMQP接入点"
+  port: 5671
+  access_key_id: "替换为你的AccessKey ID"
+  access_key_secret: "替换为你的AccessKey Secret"
+  consumer_group_id: "替换为你的消费组ID"
+  iot_instance_id: "替换为你的实例ID"
+
+iot_api:
+  enabled: false
+  access_key_id: "替换为你的AccessKey ID"
+  access_key_secret: "替换为你的AccessKey Secret"
+  region: "cn-shanghai"
+  instance_id: "替换为你的实例ID"
+  product_key: "替换为你的产品Key"
+  device_name: "替换为你的设备名"
+  poll_interval: 5
+
+# ===========================================
+# 存储配置
+# ===========================================
 
 storage:
   data_dir: "./Data/history"
-  retention_days: 180  # 保留180天
+  retention_days: 180
 
-# TimescaleDB 配置（可选）
-# 设置 enabled: true 启用 TimescaleDB 作为历史数据存储
+# ===========================================
+# TimescaleDB 配置（Docker部署）
+# docker-compose.yml 默认端口: 5555
+# ===========================================
+
 timescaledb:
-  enabled: false
+  enabled: true
   host: "localhost"
-  port: 5432
+  port: 5555
   user: "postgres"
-  password: "your_password"
+  password: "sensor123"
   dbname: "sensor_db"
   sslmode: "disable"
   max_open_conns: 25
   max_idle_conns: 5
   conn_max_lifetime: 300
 
+# ===========================================
+# 报警配置
+# ===========================================
+
 alarm:
   enabled: true
   check_interval: 5s
+
+# ===========================================
+# 日志配置
+# ===========================================
 
 logging:
   level: "info"

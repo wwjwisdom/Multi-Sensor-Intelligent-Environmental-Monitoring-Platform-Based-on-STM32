@@ -127,7 +127,7 @@ func main() {
 
 	// 8. 初始化AMQP客户端（备用，已禁用）
 	utils.Logger.Info("创建AMQP客户端...")
-	amqpClient := amqp.NewClient(cfg.AMQP, store, alarmEngine)
+	amqpClient := amqp.NewClient(cfg.AMQP, store, alarmEngine, tsdbClient)
 	if err := amqpClient.Connect(); err != nil {
 		utils.Logger.Error("AMQP连接失败", zap.Error(err))
 	} else {
