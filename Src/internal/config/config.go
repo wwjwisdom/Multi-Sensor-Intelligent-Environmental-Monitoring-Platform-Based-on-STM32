@@ -12,6 +12,7 @@ type Config struct {
 	Server  ServerConfig  `mapstructure:"server"`
 	MQTT    MQTTConfig    `mapstructure:"mqtt"`
 	AMQP    AMQPConfig    `mapstructure:"amqp"`
+	IOTAPI  IOTAPIConfig  `mapstructure:"iot_api"`
 	Storage StorageConfig `mapstructure:"storage"`
 	Alarm   AlarmConfig   `mapstructure:"alarm"`
 	Logging LoggingConfig `mapstructure:"logging"`
@@ -45,6 +46,17 @@ type AMQPConfig struct {
 	AccessKeySecret string `mapstructure:"access_key_secret"`
 	ConsumerGroupID string `mapstructure:"consumer_group_id"`
 	IOTInstanceID   string `mapstructure:"iot_instance_id"`
+}
+
+type IOTAPIConfig struct {
+	Enabled         bool   `mapstructure:"enabled"`
+	AccessKeyID     string `mapstructure:"access_key_id"`
+	AccessKeySecret string `mapstructure:"access_key_secret"`
+	Region          string `mapstructure:"region"`
+	InstanceID      string `mapstructure:"instance_id"`
+	ProductKey      string `mapstructure:"product_key"`
+	DeviceName      string `mapstructure:"device_name"`
+	PollInterval    int    `mapstructure:"poll_interval"`
 }
 
 type StorageConfig struct {

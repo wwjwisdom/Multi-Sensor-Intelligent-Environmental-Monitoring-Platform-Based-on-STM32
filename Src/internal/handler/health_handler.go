@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"sensor-backend/Src/internal/amqp"
+	"sensor-backend/Src/internal/iotapi"
 	"sensor-backend/Src/internal/mqtt"
 	"sensor-backend/Src/internal/repository"
 	"sensor-backend/Src/pkg/response"
@@ -18,14 +19,16 @@ import (
 type HealthHandler struct {
 	mqttClient *mqtt.MQTTClient
 	amqpClient *amqp.Client
+	iotPoller  *iotapi.Poller
 	store      *repository.Storage
 }
 
 // NewHealthHandler 创建处理器
-func NewHealthHandler(mqttClient *mqtt.MQTTClient, amqpClient *amqp.Client, store *repository.Storage) *HealthHandler {
+func NewHealthHandler(mqttClient *mqtt.MQTTClient, amqpClient *amqp.Client, iotPoller *iotapi.Poller, store *repository.Storage) *HealthHandler {
 	return &HealthHandler{
 		mqttClient: mqttClient,
 		amqpClient: amqpClient,
+		iotPoller:  iotPoller,
 		store:      store,
 	}
 }

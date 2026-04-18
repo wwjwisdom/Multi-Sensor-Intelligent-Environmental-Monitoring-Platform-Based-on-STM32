@@ -11,6 +11,7 @@ import (
 	"sensor-backend/Src/internal/amqp"
 	"sensor-backend/Src/internal/config"
 	"sensor-backend/Src/internal/handler"
+	"sensor-backend/Src/internal/iotapi"
 	"sensor-backend/Src/internal/mqtt"
 	"sensor-backend/Src/internal/repository"
 	"sensor-backend/Src/internal/service"
@@ -63,7 +64,34 @@ func main() {
 		utils.Logger.Info("MQTT客户端初始化成功（LED控制）")
 	}
 
-	// 7. 初始化AMQP客户端（数据接收）
+	// 7. 初始化HTTP API轮��器（主要数据接收方式）
+	utils.Logger.Info("创建HTTP API轮询器...")
+	utils.Logger.Info("HTTP API配置信息",
+		zap.Bool("enabled", cfg.IOTAPI.Enabled),
+		zap.String("region", cfg.IOTAPI.Region),
+		zap.String("device", cfg.IOTAPI.DeviceName),
+		zap.Int("interval", cfg.IOTAPI.PollInterval))
+
+	defer func() {
+		if r := recover(); r != nil {
+			utils.Logger.Error("HTTP API初始化panic", zap.Any("error", r))
+		}
+	}()
+
+	iotPoller := iotapi.NewPoller(cfg.IOTAPI, store, alarmEngine)
+	if iotPoller == nil {
+		utils.Logger.Error("HTTP API轮询器创建失败，返回nil")
+	} else {
+		utils.Logger.Info("HTTP API轮询器创建成功")
+	}
+
+	if err := iotPoller.Start(); err != nil {
+		utils.Logger.Error("HTTP API轮询器启动失败", zap.Error(err))
+	} else {
+		utils.Logger.Info("HTTP API轮询器启动成功")
+	}
+
+	// 8. 初始化AMQP客户端（备用，已禁用）
 	utils.Logger.Info("创建AMQP客户端...")
 	amqpClient := amqp.NewClient(cfg.AMQP, store, alarmEngine)
 	if err := amqpClient.Connect(); err != nil {
@@ -78,7 +106,11 @@ func main() {
 	// 9. 初始化HTTP处理器
 	sensorHandler := handler.NewSensorHandler(sensorService)
 	alarmHandler := handler.NewAlarmHandler(alarmEngine)
-	healthHandler := handler.NewHealthHandler(mqttClient, amqpClient, store)
+	healthHandler := handler.NewHealthHandler(mqttClient, amqpClient, iotPoller, store)
+	wsHandler := handler.NewWebSocketHandler()
+
+	// 设置 WebSocket 广播给 AMQP 客户端
+	amqpClient.SetWebSocketHandler(wsHandler)
 
 	// 10. 设置Gin路由
 	if cfg.Server.Mode == "release" {
@@ -120,6 +152,9 @@ func main() {
 		// 健康检查
 		v1.GET("/health", healthHandler.HealthCheck)
 	}
+
+	// WebSocket 路由
+	r.GET("/ws", wsHandler.HandleWebSocket)
 
 	// 11. 启动MQTT消息处理
 	go mqttClient.Start()

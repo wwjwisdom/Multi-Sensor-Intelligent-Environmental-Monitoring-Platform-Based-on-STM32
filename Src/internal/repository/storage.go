@@ -33,11 +33,20 @@ func NewStorage(dataDir string) *Storage {
 	}
 }
 
-// UpdateRealtime 更新实时数据
+// UpdateRealtime 更新实时数据（合并同批次数据）
 func (s *Storage) UpdateRealtime(data *model.SensorData) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.realtime[data.DeviceID] = data
+
+	existing, exists := s.realtime[data.DeviceID]
+	if exists && existing.Timestamp == data.Timestamp {
+		// 相同时间戳，合并数据
+		existing.Data = mergeData(existing.Data, data.Data)
+	} else {
+		// 新数据，直接替换
+		newData := *data
+		s.realtime[data.DeviceID] = &newData
+	}
 	s.deviceSeen[data.DeviceID] = time.Now()
 }
 
@@ -99,13 +108,32 @@ func (s *Storage) SaveHistory(data *model.SensorData) error {
 		json.Unmarshal(content, &historyFile)
 	}
 
-	// 添加新记录
-	record := model.HistoryRecord{
+	// 检查是否已存在相同时间戳的记录（合并同批次数据）
+	existingIdx := -1
+	for i, record := range historyFile.Records {
+		if record.Timestamp == data.Timestamp && record.DeviceID == data.DeviceID {
+			existingIdx = i
+			break
+		}
+	}
+
+	// 合并数据：保留已有数据，同时补充新数据中的非零值
+	newRecord := model.HistoryRecord{
 		Timestamp: data.Timestamp,
 		DeviceID:  data.DeviceID,
-		Data:      data.Data,
 	}
-	historyFile.Records = append(historyFile.Records, record)
+
+	if existingIdx >= 0 {
+		// 合并到已有记录
+		existing := historyFile.Records[existingIdx]
+		newRecord.Data = mergeData(existing.Data, data.Data)
+		historyFile.Records[existingIdx] = newRecord
+	} else {
+		// 添加新记录
+		newRecord.Data = data.Data
+		historyFile.Records = append(historyFile.Records, newRecord)
+	}
+
 	historyFile.Date = date
 
 	// 原子写入：先写临时文件，再重命名
@@ -120,6 +148,34 @@ func (s *Storage) SaveHistory(data *model.SensorData) error {
 	}
 
 	return os.Rename(tmpPath, filePath)
+}
+
+// mergeData 合并两条传感器数据，保留非零值
+func mergeData(existing, new model.Data) model.Data {
+	result := existing
+	if new.Temperature != 0 {
+		result.Temperature = new.Temperature
+	}
+	if new.Humidity != 0 {
+		result.Humidity = new.Humidity
+	}
+	if new.Pressure != 0 {
+		result.Pressure = new.Pressure
+	}
+	if new.Light != 0 {
+		result.Light = new.Light
+	}
+	if new.AirQuality != 0 {
+		result.AirQuality = new.AirQuality
+	}
+	// motion 和 rain 保留最新值
+	if new.Motion != existing.Motion {
+		result.Motion = new.Motion
+	}
+	if new.Rain != existing.Rain {
+		result.Rain = new.Rain
+	}
+	return result
 }
 
 // QueryHistory 查询历史数据
@@ -165,8 +221,8 @@ func (s *Storage) QueryHistory(deviceID string, startTime, endTime int64, page, 
 	if pageSize < 1 {
 		pageSize = 20
 	}
-	if pageSize > 100 {
-		pageSize = 100
+	if pageSize > 2000 {
+		pageSize = 2000  // 提高最大限制以支持更长时间范围的数据查询
 	}
 
 	start := (page - 1) * pageSize

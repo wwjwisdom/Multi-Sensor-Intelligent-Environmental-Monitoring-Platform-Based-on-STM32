@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,19 +17,33 @@ import (
 	"sensor-backend/Src/internal/repository"
 	"sensor-backend/Src/pkg/utils"
 
-	amqp "github.com/Azure/go-amqp"
+	amqp "pack.ag/amqp"
 	"go.uber.org/zap"
 )
 
-// Client AMQP客户端
+// Client AMQP客户端（官方SDK版本）
 type Client struct {
 	config      config.AMQPConfig
 	store       *repository.Storage
 	alarmEngine *alarm.AlarmEngine
+	wsHandler   interface{ Broadcast([]byte) }
 	connected   bool
 	mu          sync.RWMutex
 	reconnectCount int32
 	cancel      context.CancelFunc
+}
+
+// AmqpManager 官方示例结构
+type AmqpManager struct {
+	address     string
+	userName    string
+	password    string
+	client      *amqp.Client
+	session     *amqp.Session
+	receiver    *amqp.Receiver
+	store       *repository.Storage
+	alarmEngine *alarm.AlarmEngine
+	wsHandler   interface{ Broadcast([]byte) }
 }
 
 // NewClient 创建AMQP客户端
@@ -41,6 +54,11 @@ func NewClient(cfg config.AMQPConfig, store *repository.Storage, alarmEngine *al
 		alarmEngine: alarmEngine,
 		connected:   false,
 	}
+}
+
+// SetWebSocketHandler 设置 WebSocket 处理器
+func (c *Client) SetWebSocketHandler(handler interface{ Broadcast([]byte) }) {
+	c.wsHandler = handler
 }
 
 // Connect 启动AMQP连接和消费循环（非阻塞）
@@ -68,9 +86,39 @@ func (c *Client) run(ctx context.Context) {
 		default:
 		}
 
-		conn, session, err := c.connectAMQP(ctx)
-		if err != nil {
-			utils.Logger.Error("AMQP连接失败", zap.Error(err))
+		// 创建官方SDK的AMQP管理器
+		amqpMgr := &AmqpManager{
+			store:       c.store,
+			alarmEngine: c.alarmEngine,
+			wsHandler:   c.wsHandler,
+		}
+
+		// 设置连接参数
+		amqpMgr.address = fmt.Sprintf("amqps://%s:5671", c.config.Host)
+
+		// 生成用户名（与官方示例一致）
+		timestamp := time.Now().UnixMilli()
+		clientID := fmt.Sprintf("client-%d", timestamp)
+		amqpMgr.userName = fmt.Sprintf("%s|authMode=aksign,signMethod=hmacsha1,consumerGroupId=%s,authId=%s,iotInstanceId=%s,timestamp=%d|",
+			clientID,
+			c.config.ConsumerGroupID,
+			c.config.AccessKeyID,
+			c.config.IOTInstanceID,
+			timestamp)
+
+		// 生成密码（与官方示例一致）
+		stringToSign := fmt.Sprintf("authId=%s&timestamp=%d", c.config.AccessKeyID, timestamp)
+		hmacKey := hmac.New(sha1.New, []byte(c.config.AccessKeySecret))
+		hmacKey.Write([]byte(stringToSign))
+		amqpMgr.password = base64.StdEncoding.EncodeToString(hmacKey.Sum(nil))
+
+		utils.Logger.Info("正在连接AMQP服务器（官方SDK）",
+			zap.String("host", c.config.Host),
+			zap.String("consumer_group", c.config.ConsumerGroupID))
+
+		// 开始接收消息
+		if err := amqpMgr.startReceiveMessage(ctx, c); err != nil {
+			utils.Logger.Error("AMQP接收失败", zap.Error(err))
 			backoff := c.getBackoffTime()
 			utils.Logger.Info(fmt.Sprintf("等待 %v 后重连...", backoff))
 			select {
@@ -80,160 +128,98 @@ func (c *Client) run(ctx context.Context) {
 				continue
 			}
 		}
-
-		c.setConnected(true)
-		atomic.StoreInt32(&c.reconnectCount, 0)
-		utils.Logger.Info("AMQP连接成功")
-
-		err = c.consumeMessages(ctx, session, conn)
-		if ctx.Err() != nil {
-			c.setConnected(false)
-			return
-		}
-
-		if err != nil {
-			c.setConnected(false)
-			utils.Logger.Warn("消息消费中断，准备重连", zap.Error(err))
-		}
-
-		c.cleanup(conn, session)
 	}
 }
 
-func (c *Client) connectAMQP(ctx context.Context) (*amqp.Conn, *amqp.Session, error) {
-	clientID := fmt.Sprintf("consumer-%d", time.Now().UnixNano())
-	timestamp := fmt.Sprintf("%d", time.Now().UnixMilli())
+// startReceiveMessage 官方示例中的消息接收函数
+func (am *AmqpManager) startReceiveMessage(ctx context.Context, c *Client) error {
+	childCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	authParams := fmt.Sprintf("iotInstanceId=%s,authMode=aksign,signMethod=hmacsha1,consumerGroupId=%s,authId=%s,timestamp=%s",
-		c.config.IOTInstanceID,
-		c.config.ConsumerGroupID,
-		c.config.AccessKeyID,
-		timestamp)
-
-	username := fmt.Sprintf("%s|%s|", clientID, authParams)
-	stringToSign := fmt.Sprintf("authId=%s&timestamp=%s", c.config.AccessKeyID, timestamp)
-	password := signHMACSHA1(stringToSign, c.config.AccessKeySecret)
-
-	u := url.URL{
-		Scheme: "amqps",
-		Host:   fmt.Sprintf("%s:%d", c.config.Host, c.config.Port),
-		User:   url.UserPassword(username, password),
+	// 建立连接并重试
+	if err := am.generateReceiverWithRetry(childCtx); err != nil {
+		return err
 	}
 
-	opts := &amqp.ConnOptions{
-		ContainerID: clientID,
-		IdleTimeout: 60 * time.Second,
-	}
+	c.setConnected(true)
+	atomic.StoreInt32(&c.reconnectCount, 0)
+	utils.Logger.Info("AMQP连接成功（官方SDK）")
 
-	conn, err := amqp.Dial(ctx, u.String(), opts)
-	if err != nil {
-		return nil, nil, fmt.Errorf("拨号失败: %w", err)
-	}
+	messageCount := 0
 
-	session, err := conn.NewSession(ctx, nil)
-	if err != nil {
-		conn.Close()
-		return nil, nil, fmt.Errorf("创建会话失败: %w", err)
-	}
-
-	return conn, session, nil
-}
-
-func (c *Client) consumeMessages(ctx context.Context, session *amqp.Session, conn *amqp.Conn) error {
-	addr := fmt.Sprintf("/%s/%s", c.config.IOTInstanceID, c.config.ConsumerGroupID)
-
-	receiver, err := session.NewReceiver(
-		ctx,
-		addr,
-		&amqp.ReceiverOptions{
-			Credit: 10,
-		},
-	)
-	if err != nil {
-		return fmt.Errorf("创建接收者失败: %w", err)
-	}
-	defer receiver.Close(ctx)
-
-	utils.Logger.Info("开始消费AMQP消息...")
-
+	// 官方示例中的循环接收逻辑
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		recvCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		msg, err := receiver.Receive(recvCtx, nil)
-		cancel()
+		// 阻塞接受消息，如果ctx是background则不会被打断
+		message, err := am.receiver.Receive(ctx)
 
 		if err != nil {
-			if recvCtx.Err() == context.DeadlineExceeded {
-				// 超时是正常的，继续等待
-				continue
+			utils.Logger.Error("AMQP接收消息出错", zap.Error(err))
+
+			select {
+			case <-childCtx.Done():
+				c.setConnected(false)
+				return amqp.ErrConnClosed
+			default:
 			}
-			if ctx.Err() != nil {
-				continue
+
+			// 非主动取消，重新建立连接
+			err := am.generateReceiverWithRetry(childCtx)
+			if err != nil {
+				c.setConnected(false)
+				return err
 			}
-			utils.Logger.Warn("接收消息出错", zap.Error(err))
 			continue
 		}
 
-		utils.Logger.Info("收到消息，准备处理",
-			zap.Int("data_len", len(msg.Data)),
+		messageCount++
+		utils.Logger.Info("收到消息",
+			zap.Int("message_count", messageCount),
 			zap.String("time", time.Now().Format("15:04:05.000")))
-		c.handleMessage(msg)
-	}
-}
 
-func (c *Client) handleMessage(msg *amqp.Message) {
-	topic := ""
-	if len(msg.ApplicationProperties) > 0 {
-		if t, ok := msg.ApplicationProperties["topic"]; ok {
-			if ts, ok := t.(string); ok {
-				topic = ts
-			}
+		// 在goroutine中处理消息（与官方示例一致）
+		go am.processMessage(message)
+
+		// 确认消息已被处理（关键！与官方示例一致）
+		if err := message.Accept(); err != nil {
+			utils.Logger.Warn("确认消息失败", zap.Error(err))
 		}
 	}
-
-	utils.Logger.Info("收到AMQP消息", zap.String("topic", topic))
-
-	switch {
-	case contains(topic, "thing/event/property/post"):
-		c.handlePropertyPost(msg)
-	case contains(topic, "thing/status"):
-		c.handleStatusChange(msg)
-	default:
-		utils.Logger.Info("未识别的消息类型", zap.String("topic", topic))
-	}
 }
 
-func (c *Client) handlePropertyPost(msg *amqp.Message) {
-	payload := c.getPayload(msg)
-	if payload == nil {
+// processMessage 官方示例中的消息处理函数
+func (am *AmqpManager) processMessage(message *amqp.Message) {
+	// pack.ag/amqp 的 Data 字段是 [][]byte，需要合并
+	var data []byte
+	for _, b := range message.Data {
+		data = append(data, b...)
+	}
+	if len(data) == 0 {
+		utils.Logger.Warn("收到空消息")
 		return
 	}
 
-	utils.Logger.Info("原始AMQP消息内容", zap.String("payload", string(payload)))
+	utils.Logger.Info("处理AMQP消息",
+		zap.String("data", string(data)))
 
-	var data struct {
+	// 解析消息
+	var msgData struct {
 		DeviceName string                 `json:"deviceName"`
 		ProductKey string                 `json:"productKey"`
-		Timestamp  int64                  `json:"timestamp"`
-		Items      map[string]interface{} `json:"items"`
+		Timestamp int64                  `json:"timestamp"`
+		Items     map[string]interface{} `json:"items"`
 	}
 
-	if err := json.Unmarshal(payload, &data); err != nil {
-		utils.Logger.Error("解析设备属性上报失败", zap.Error(err), zap.String("raw_payload", string(payload)))
+	if err := json.Unmarshal(data, &msgData); err != nil {
+		utils.Logger.Error("解析AMQP消息失败", zap.Error(err))
 		return
 	}
 
-	deviceID := data.DeviceName
+	deviceID := msgData.DeviceName
 	if deviceID == "" {
 		deviceID = "STM32-EnvMonitor-001"
 	}
 
-	timestamp := data.Timestamp
+	timestamp := msgData.Timestamp
 	if timestamp == 0 {
 		timestamp = time.Now().UnixMilli() / 1000
 	}
@@ -241,65 +227,102 @@ func (c *Client) handlePropertyPost(msg *amqp.Message) {
 	sensorData := &model.SensorData{
 		DeviceID:  deviceID,
 		Timestamp: timestamp,
-		Data:      parseItemsToData(data.Items),
+		Data:      parseItemsToData(msgData.Items),
 	}
 
 	if !validateSensorData(sensorData) {
-		utils.Logger.Warn("传感器数据验证失败", zap.Any("data", sensorData))
+		utils.Logger.Warn("传感器数据验证失败")
 		return
 	}
 
 	// 更新实时数据
-	c.store.UpdateRealtime(sensorData)
+	am.store.UpdateRealtime(sensorData)
 	utils.Logger.Info("实时数据已更新",
 		zap.String("device_id", deviceID),
 		zap.Float64("temp", sensorData.Data.Temperature),
-		zap.Float64("hum", sensorData.Data.Humidity),
-		zap.String("time", time.Now().Format("15:04:05.000")))
+		zap.Float64("hum", sensorData.Data.Humidity))
 
 	// 保存历史数据
-	if err := c.store.SaveHistory(sensorData); err != nil {
+	if err := am.store.SaveHistory(sensorData); err != nil {
 		utils.Logger.Error("保存历史数据失败", zap.Error(err))
-	} else {
-		utils.Logger.Info("成功保存传感器数据",
-			zap.String("device_id", sensorData.DeviceID),
-			zap.Float64("temperature", sensorData.Data.Temperature),
-			zap.Float64("humidity", sensorData.Data.Humidity))
 	}
 
 	// 检查报警
-	c.alarmEngine.CheckAlarms(sensorData)
+	am.alarmEngine.CheckAlarms(sensorData)
+
+	// 通过 WebSocket 广播给前端
+	if am.wsHandler != nil {
+		sensorJSON, _ := json.Marshal(sensorData)
+		am.wsHandler.Broadcast(sensorJSON)
+	}
 }
 
-func (c *Client) handleStatusChange(msg *amqp.Message) {
-	payload := c.getPayload(msg)
-	if payload == nil {
-		return
-	}
+// generateReceiverWithRetry 官方示例中的连接重试函数
+func (am *AmqpManager) generateReceiverWithRetry(ctx context.Context) error {
+	duration := 10 * time.Millisecond
+	maxDuration := 20000 * time.Millisecond
+	times := 1
 
-	var data struct {
-		DeviceName string `json:"deviceName"`
-		ProductKey string `json:"productKey"`
-		Status     string `json:"status"`
-		Timestamp  int64  `json:"timestamp"`
-	}
+	// 异常情况，退避重连
+	for {
+		select {
+		case <-ctx.Done():
+			return amqp.ErrConnClosed
+		default:
+		}
 
-	if err := json.Unmarshal(payload, &data); err != nil {
-		utils.Logger.Error("解析设备状态变化失败", zap.Error(err))
-		return
-	}
+		err := am.generateReceiver()
+		if err != nil {
+			utils.Logger.Warn("AMQP连接重试",
+				zap.Int("times", times),
+				zap.Duration("duration", duration),
+				zap.Error(err))
 
-	utils.Logger.Info("=== 设备状态变化 ===",
-		zap.String("device", fmt.Sprintf("%s/%s", data.ProductKey, data.DeviceName)),
-		zap.String("status", data.Status),
-		zap.Int64("timestamp", data.Timestamp))
+			time.Sleep(duration)
+			if duration < maxDuration {
+				duration *= 2
+			}
+			times++
+		} else {
+			utils.Logger.Info("AMQP连接初始化成功")
+			return nil
+		}
+	}
 }
 
-func (c *Client) getPayload(msg *amqp.Message) []byte {
-	if msg.Data == nil || len(msg.Data) == 0 {
-		return nil
+// generateReceiver 官方示例中的建立连接函数
+func (am *AmqpManager) generateReceiver() error {
+	// 清理上一个连接
+	if am.client != nil {
+		am.client.Close()
 	}
-	return msg.Data[0]
+
+	// 建立连接
+	client, err := amqp.Dial(am.address, amqp.ConnSASLPlain(am.userName, am.password))
+	if err != nil {
+		return fmt.Errorf("AMQP拨号失败: %w", err)
+	}
+	am.client = client
+
+	// 创建会话
+	session, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("AMQP创建会话失败: %w", err)
+	}
+	am.session = session
+
+	// 创建接收者 - 地址格式与官方示例一致
+	receiverAddress := fmt.Sprintf("/%s/%s", "iot-06z00i44a0e6h4j", "VNDTFVa24p2nyTp1yHE8000100")
+	receiver, err := session.NewReceiver(
+		amqp.LinkSourceAddress(receiverAddress),
+		amqp.LinkCredit(20), // 与官方示例一致
+	)
+	if err != nil {
+		return fmt.Errorf("AMQP创建接收者失败: %w", err)
+	}
+	am.receiver = receiver
+
+	return nil
 }
 
 func (c *Client) setConnected(v bool) {
@@ -331,15 +354,6 @@ func (c *Client) getBackoffTime() time.Duration {
 		backoff = 60 * time.Second
 	}
 	return backoff
-}
-
-func (c *Client) cleanup(conn *amqp.Conn, session *amqp.Session) {
-	if session != nil {
-		session.Close(context.Background())
-	}
-	if conn != nil {
-		conn.Close()
-	}
 }
 
 // parseItemsToData 将阿里云 items 格式解析为内部 Data 结构
@@ -405,27 +419,18 @@ func parseItemsToData(items map[string]interface{}) model.Data {
 func validateSensorData(data *model.SensorData) bool {
 	d := data.Data
 
-	// 温度：-40~80℃
 	if d.Temperature != 0 && (d.Temperature < -40 || d.Temperature > 80) {
 		return false
 	}
-
-	// 湿度：0~100%RH
 	if d.Humidity != 0 && (d.Humidity < 0 || d.Humidity > 100) {
 		return false
 	}
-
-	// 大气压力：0~1100 hPa（放宽下限以兼容设备实际值）
 	if d.Pressure != 0 && (d.Pressure < 0 || d.Pressure > 1100) {
 		return false
 	}
-
-	// 光照：0~65535 lux
 	if d.Light != 0 && (d.Light < 0 || d.Light > 65535) {
 		return false
 	}
-
-	// 空气质量：0~500 AQI
 	if d.AirQuality != 0 && (d.AirQuality < 0 || d.AirQuality > 500) {
 		return false
 	}
@@ -459,20 +464,4 @@ func toInt(v interface{}) (int, bool) {
 	default:
 		return 0, false
 	}
-}
-
-func contains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
-
-func signHMACSHA1(stringToSign, accessKeySecret string) string {
-	h := hmac.New(sha1.New, []byte(accessKeySecret))
-	h.Write([]byte(stringToSign))
-	signature := h.Sum(nil)
-	return base64.StdEncoding.EncodeToString(signature)
 }
