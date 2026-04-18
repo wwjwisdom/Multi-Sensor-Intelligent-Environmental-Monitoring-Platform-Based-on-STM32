@@ -4,6 +4,7 @@ Data/config/config.yaml
 # 可执行文件
 *.exe
 Src/main.exe
+sensor_server.exe
 
 # IDE
 .idea/
@@ -17,13 +18,12 @@ Src/main.exe
 # 临时文件
 *.tmp
 *.log
+Src/main.exe~
+test.go
+test_api.go
+generate_test_data.py
 
 # 数据目录
 Data/history/
 Data/logs/
-
-# 临时文件
-
-# 测试文件
-test*.go
-generate_test_data.py
+Data/mqtt/
