@@ -1,0 +1,23 @@
+# TimescaleDB Docker Compose 配置
+# 运行: docker-compose up -d
+
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: sensor-timescaledb
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: sensor123
+      POSTGRES_DB: sensor_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  timescaledb_data:

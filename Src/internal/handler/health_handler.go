@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"runtime"
@@ -10,6 +11,7 @@ import (
 	"sensor-backend/Src/internal/iotapi"
 	"sensor-backend/Src/internal/mqtt"
 	"sensor-backend/Src/internal/repository"
+	"sensor-backend/Src/internal/tsdb"
 	"sensor-backend/Src/pkg/response"
 
 	"github.com/gin-gonic/gin"
@@ -21,15 +23,17 @@ type HealthHandler struct {
 	amqpClient *amqp.Client
 	iotPoller  *iotapi.Poller
 	store      *repository.Storage
+	tsdbClient *tsdb.Client
 }
 
 // NewHealthHandler 创建处理器
-func NewHealthHandler(mqttClient *mqtt.MQTTClient, amqpClient *amqp.Client, iotPoller *iotapi.Poller, store *repository.Storage) *HealthHandler {
+func NewHealthHandler(mqttClient *mqtt.MQTTClient, amqpClient *amqp.Client, iotPoller *iotapi.Poller, store *repository.Storage, tsdbClient *tsdb.Client) *HealthHandler {
 	return &HealthHandler{
 		mqttClient: mqttClient,
 		amqpClient: amqpClient,
 		iotPoller:  iotPoller,
 		store:      store,
+		tsdbClient: tsdbClient,
 	}
 }
 
@@ -40,6 +44,20 @@ func (h *HealthHandler) HealthCheck(c *gin.Context) {
 
 	// 检查HTTP
 	components["http"] = "ok"
+
+	// 检查 TimescaleDB
+	if h.tsdbClient != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if err := h.tsdbClient.Ping(ctx); err != nil {
+			components["timescaledb"] = "error"
+			overallStatus = "degraded"
+		} else {
+			components["timescaledb"] = "connected"
+		}
+		cancel()
+	} else {
+		components["timescaledb"] = "disabled"
+	}
 
 	// 检查AMQP（数据接收）
 	if h.amqpClient.IsConnected() {
@@ -88,20 +106,41 @@ func (h *HealthHandler) HealthCheck(c *gin.Context) {
 
 	// 获取指标
 	metrics := make(map[string]interface{})
-	metrics["total_records"] = h.store.GetTotalRecords("")
+
+	// 从 TimescaleDB 或文件存储获取总记录数
+	if h.tsdbClient != nil {
+		if total, err := h.tsdbClient.GetTotalRecords(""); err == nil {
+			metrics["total_records"] = total
+		}
+	}
+	if _, ok := metrics["total_records"]; !ok {
+		metrics["total_records"] = h.store.GetTotalRecords("")
+	}
 
 	// 获取最后数据时间
-	allData := h.store.GetAllRealtime()
-	if len(allData) > 0 {
-		for _, data := range allData {
-			lastTime := time.Unix(data.Timestamp, 0)
-			metrics["last_data_time"] = lastTime.Format(time.RFC3339)
-
-			// 检查是否超过60秒无数据
-			if time.Since(lastTime) > 60*time.Second {
-				overallStatus = "degraded"
+	if h.tsdbClient != nil {
+		if data, err := h.tsdbClient.GetAllLatestData(); err == nil && len(data) > 0 {
+			for _, data := range data {
+				lastTime := time.Unix(data.Timestamp, 0)
+				metrics["last_data_time"] = lastTime.Format(time.RFC3339)
+				if time.Since(lastTime) > 60*time.Second {
+					overallStatus = "degraded"
+				}
+				break
 			}
-			break
+		}
+	}
+	if _, ok := metrics["last_data_time"]; !ok {
+		allDataRaw := h.store.GetAllRealtime()
+		if len(allDataRaw) > 0 {
+			for _, data := range allDataRaw {
+				lastTime := time.Unix(data.Timestamp, 0)
+				metrics["last_data_time"] = lastTime.Format(time.RFC3339)
+				if time.Since(lastTime) > 60*time.Second {
+					overallStatus = "degraded"
+				}
+				break
+			}
 		}
 	}
 

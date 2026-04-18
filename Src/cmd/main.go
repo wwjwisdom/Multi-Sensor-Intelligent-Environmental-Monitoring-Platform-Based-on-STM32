@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"sensor-backend/Src/internal/alarm"
 	"sensor-backend/Src/internal/amqp"
@@ -15,6 +16,7 @@ import (
 	"sensor-backend/Src/internal/mqtt"
 	"sensor-backend/Src/internal/repository"
 	"sensor-backend/Src/internal/service"
+	"sensor-backend/Src/internal/tsdb"
 	"sensor-backend/Src/pkg/utils"
 
 	"github.com/gin-gonic/gin"
@@ -37,16 +39,48 @@ func main() {
 	utils.Logger.Info("=== 传感器数据采集系统启动 ===")
 
 	// 3. 初始化数据存储
-	utils.Logger.Info("初始化数据存储...")
-	store := repository.NewStorage(cfg.Storage.DataDir)
-	utils.Logger.Info("数据存储初始化完成")
+	var store *repository.Storage
+	var tsdbClient *tsdb.Client
+
+	// 根据配置选择存储方式
+	if cfg.TimescaleDB.Enabled {
+		utils.Logger.Info("初始化 TimescaleDB 存储...")
+		tsdbClient, err = tsdb.NewClient(tsdb.Config{
+			Host:            cfg.TimescaleDB.Host,
+			Port:            cfg.TimescaleDB.Port,
+			User:            cfg.TimescaleDB.User,
+			Password:        cfg.TimescaleDB.Password,
+			DBName:          cfg.TimescaleDB.DBName,
+			SSLMode:         cfg.TimescaleDB.SSLMode,
+			MaxOpenConns:    cfg.TimescaleDB.MaxOpenConns,
+			MaxIdleConns:    cfg.TimescaleDB.MaxIdleConns,
+			ConnMaxLifetime: time.Duration(cfg.TimescaleDB.ConnMaxLifetime) * time.Second,
+		}, utils.Logger)
+		if err != nil {
+			utils.Logger.Error("TimescaleDB 初始化失败，降级到文件存储", zap.Error(err))
+			tsdbClient = nil
+		} else {
+			utils.Logger.Info("TimescaleDB 存储初始化成功")
+		}
+	}
+
+	// 始终初始化文件存储作为备用/实时缓存
+	store = repository.NewStorage(cfg.Storage.DataDir)
+	utils.Logger.Info("文件存储初始化完成")
 
 	// 4. 启动时清理过期数据
-	utils.Logger.Info("检查并清理过期历史数据...", zap.Int("retention_days", cfg.Storage.RetentionDays))
-	if err := store.CleanupOldData(cfg.Storage.RetentionDays); err != nil {
-		utils.Logger.Error("清理过期数据失败", zap.Error(err))
+	if tsdbClient != nil {
+		utils.Logger.Info("清理 TimescaleDB 过期数据...", zap.Int("retention_days", cfg.Storage.RetentionDays))
+		if err := tsdbClient.CleanupOldData(cfg.Storage.RetentionDays); err != nil {
+			utils.Logger.Error("清理 TimescaleDB 数据失败", zap.Error(err))
+		}
 	} else {
-		utils.Logger.Info("过期数据清理完成")
+		utils.Logger.Info("清理文件存储过期数据...", zap.Int("retention_days", cfg.Storage.RetentionDays))
+		if err := store.CleanupOldData(cfg.Storage.RetentionDays); err != nil {
+			utils.Logger.Error("清理过期数据失败", zap.Error(err))
+		} else {
+			utils.Logger.Info("过期数据清理完成")
+		}
 	}
 
 	// 5. 初始化报警引擎
@@ -101,12 +135,12 @@ func main() {
 	}
 
 	// 8. 初始化服务层
-	sensorService := service.NewSensorService(store, mqttClient)
+	sensorService := service.NewSensorService(store, mqttClient, tsdbClient)
 
 	// 9. 初始化HTTP处理器
 	sensorHandler := handler.NewSensorHandler(sensorService)
 	alarmHandler := handler.NewAlarmHandler(alarmEngine)
-	healthHandler := handler.NewHealthHandler(mqttClient, amqpClient, iotPoller, store)
+	healthHandler := handler.NewHealthHandler(mqttClient, amqpClient, iotPoller, store, tsdbClient)
 	wsHandler := handler.NewWebSocketHandler()
 
 	// 设置 WebSocket 广播给 AMQP 客户端

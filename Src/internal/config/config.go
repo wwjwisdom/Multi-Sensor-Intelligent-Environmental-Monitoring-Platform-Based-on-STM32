@@ -9,13 +9,14 @@ import (
 )
 
 type Config struct {
-	Server  ServerConfig  `mapstructure:"server"`
-	MQTT    MQTTConfig    `mapstructure:"mqtt"`
-	AMQP    AMQPConfig    `mapstructure:"amqp"`
-	IOTAPI  IOTAPIConfig  `mapstructure:"iot_api"`
-	Storage StorageConfig `mapstructure:"storage"`
-	Alarm   AlarmConfig   `mapstructure:"alarm"`
-	Logging LoggingConfig `mapstructure:"logging"`
+	Server     ServerConfig     `mapstructure:"server"`
+	MQTT       MQTTConfig       `mapstructure:"mqtt"`
+	AMQP       AMQPConfig       `mapstructure:"amqp"`
+	IOTAPI     IOTAPIConfig     `mapstructure:"iot_api"`
+	Storage    StorageConfig    `mapstructure:"storage"`
+	TimescaleDB TimescaleDBConfig `mapstructure:"timescaledb"`
+	Alarm      AlarmConfig      `mapstructure:"alarm"`
+	Logging    LoggingConfig     `mapstructure:"logging"`
 }
 
 type ServerConfig struct {
@@ -62,6 +63,20 @@ type IOTAPIConfig struct {
 type StorageConfig struct {
 	DataDir       string `mapstructure:"data_dir"`
 	RetentionDays int    `mapstructure:"retention_days"`
+}
+
+// TimescaleDBConfig TimescaleDB配置
+type TimescaleDBConfig struct {
+	Enabled        bool   `mapstructure:"enabled"`
+	Host           string `mapstructure:"host"`
+	Port           int    `mapstructure:"port"`
+	User           string `mapstructure:"user"`
+	Password       string `mapstructure:"password"`
+	DBName         string `mapstructure:"dbname"`
+	SSLMode        string `mapstructure:"sslmode"`
+	MaxOpenConns   int    `mapstructure:"max_open_conns"`
+	MaxIdleConns   int    `mapstructure:"max_idle_conns"`
+	ConnMaxLifetime int   `mapstructure:"conn_max_lifetime"`
 }
 
 type AlarmConfig struct {

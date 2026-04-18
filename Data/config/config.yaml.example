@@ -23,6 +23,20 @@ storage:
   data_dir: "./Data/history"
   retention_days: 180  # 保留180天
 
+# TimescaleDB 配置（可选）
+# 设置 enabled: true 启用 TimescaleDB 作为历史数据存储
+timescaledb:
+  enabled: false
+  host: "localhost"
+  port: 5432
+  user: "postgres"
+  password: "your_password"
+  dbname: "sensor_db"
+  sslmode: "disable"
+  max_open_conns: 25
+  max_idle_conns: 5
+  conn_max_lifetime: 300
+
 alarm:
   enabled: true
   check_interval: 5s
